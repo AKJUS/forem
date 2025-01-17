@@ -1,13 +1,13 @@
 article_attributes_to_include = %i[
   title path id user_id comments_count public_reactions_count organization_id
-  reading_time video_thumbnail_url video video_duration_in_minutes
-  experience_level_rating experience_level_rating_distribution main_image_height
+  reading_time video_thumbnail_url video video_duration_in_minutes edited_at
+  experience_level_rating experience_level_rating_distribution main_image_height type_of
 ]
 article_methods_to_include = %i[
   readable_publish_date flare_tag class_name
   cloudinary_video_url video_duration_in_minutes published_at_int
   published_timestamp main_image_background_hex_color
-  public_reaction_categories
+  public_reaction_categories body_preview
 ]
 
 json.array!(@stories) do |article|
@@ -28,6 +28,8 @@ json.array!(@stories) do |article|
   else
     json.main_image nil
   end
+
+  json.url URL.article(article)
 
   json.tag_list article.cached_tag_list_array
   json.extract! article, *article_methods_to_include
