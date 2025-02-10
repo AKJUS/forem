@@ -84,6 +84,7 @@ class Billboard < ApplicationRecord
   before_save :process_markdown
   after_save :generate_billboard_name
   after_save :refresh_audience_segment, if: :should_refresh_audience_segment?
+  after_save :update_links_with_bb_param
 
   scope :approved_and_published, -> { where(approved: true, published: true) }
 
@@ -222,6 +223,21 @@ class Billboard < ApplicationRecord
     selected_number.to_i
   end
 
+  def processed_html_final
+    # This is a final non-database-driven step to adjust processed html
+    # It is sort of a hack to avoid having to reprocess all articles
+    # It is currently only for this one cloudflare domain change
+    # It is duplicated across article, bullboard and comment where it is most needed
+    # In the future this could be made more customizable. For now it's just this one thing.
+    return processed_html if ApplicationConfig["PRIOR_CLOUDFLARE_IMAGES_DOMAIN"].blank? || ApplicationConfig["CLOUDFLARE_IMAGES_DOMAIN"].blank?
+
+    processed_html.gsub(ApplicationConfig["PRIOR_CLOUDFLARE_IMAGES_DOMAIN"], ApplicationConfig["CLOUDFLARE_IMAGES_DOMAIN"])
+  end
+
+  def type_of_display
+    type_of.gsub("external", "partner")
+  end
+
   def human_readable_placement_area
     ALLOWED_PLACEMENT_AREAS_HUMAN_READABLE[ALLOWED_PLACEMENT_AREAS.find_index(placement_area)]
   end
@@ -293,6 +309,12 @@ class Billboard < ApplicationRecord
     write_attribute :target_role_names, (adjusted_input || [])
   end
 
+  def include_subforem_ids=(input)
+    adjusted_input = input.is_a?(String) ? input.split(",") : input
+    adjusted_input = adjusted_input&.filter_map { |value| value.presence&.to_i }
+    write_attribute :include_subforem_ids, (adjusted_input || [])
+  end
+
   def style_string
     return "" if color.blank?
 
@@ -301,6 +323,44 @@ class Billboard < ApplicationRecord
     else
       "border: 5px solid #{color}"
     end
+  end
+
+  def update_links_with_bb_param
+    # Parse the processed_html with Nokogiri
+    full_html = "<html><head></head><body>#{processed_html}</body></html>"
+    doc = Nokogiri::HTML(full_html)
+    # Iterate over all the <a> tags
+    doc.css("a").each do |link|
+      href = link["href"]
+      next unless href.present? && href.start_with?("http", "/")
+
+      uri = URI.parse(href)
+      existing_params = URI.decode_www_form(uri.query || "")
+      # Check if 'bb' parameter exists and update it or append if not exists
+      bb_param_index = existing_params.find_index { |param| param[0] == "bb" }
+      if bb_param_index
+        existing_params[bb_param_index][1] = id.to_s # Update existing 'bb' parameter
+      else
+        existing_params << ["bb", id.to_s] # Append new 'bb' parameter
+      end
+      uri.query = URI.encode_www_form(existing_params)
+      link["href"] = uri.to_s
+    end
+
+    # Extract and save only the inner HTML of the body
+    modified_html = doc.at("body").inner_html
+
+    modified_html.gsub!(/href="([^"]*)&amp;([^"]*)"/, 'href="\1&\2"')
+
+    # Early return if the new HTML is the same as the old one
+    return if modified_html == processed_html
+
+    # Update the processed_html column with the new HTML
+    update_column(:processed_html, modified_html)
+  end
+
+  def score
+    0 # Just to allow this to repond to .score for abuse reports
   end
 
   private
